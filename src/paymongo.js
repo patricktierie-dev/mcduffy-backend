@@ -52,12 +52,25 @@ async function createPlan({ name, description, amount, currency = 'PHP', interva
 
 // --- Customers ---
 async function createCustomer({ email, first_name, last_name, phone }) {
+  // Sanitize phone: remove plus and spaces
+  const cleanPhone = phone ? phone.replace(/\D/g, '').slice(0, 13) : undefined;
+
   const payload = {
-    data: { attributes: { email, first_name, last_name, phone } }
+    data: {
+      attributes: {
+        email,
+        first_name,
+        last_name,
+        phone: cleanPhone,
+        default_device: "desktop" // required by PayMongo
+      }
+    }
   };
+
   const { data } = await post('/customers', payload);
-  return data.data; // {id, attributes...}
+  return data.data;
 }
+
 
 // retrieve existing customer(s) by email if you prefer re-use
 async function findCustomersByEmail(email) {
