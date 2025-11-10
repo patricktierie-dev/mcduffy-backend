@@ -12,21 +12,20 @@ function authHeader() {
   return 'Basic ' + Buffer.from(sk + ':').toString('base64');
 }
 
-// helpers add standard headers; include Idempotency-Key on POST/PUT to be safe
 function post(path, data, idemKey = uuid()) {
   return PM.post(path, data, {
     headers: {
       'Authorization': authHeader(),
       'Content-Type': 'application/json',
-      'Idempotency-Key': idemKey // safe retries if network flakes
+      'Idempotency-Key': idemKey
     }
   });
 }
+
 function get(path) {
-  return PM.get(path, {
-    headers: { 'Authorization': authHeader() }
-  });
+  return PM.get(path, { headers: { 'Authorization': authHeader() } });
 }
+
 function put(path, data, idemKey = uuid()) {
   return PM.put(path, data, {
     headers: {
@@ -37,7 +36,9 @@ function put(path, data, idemKey = uuid()) {
   });
 }
 
-// --- Plans ---
+/* ---------- PAYMONGO ---------- */
+
+// Plan
 async function createPlan({ name, description, amount, currency = 'PHP', interval = 'monthly', interval_count = 1, cycle_count = null }) {
   const payload = {
     data: {
@@ -45,55 +46,63 @@ async function createPlan({ name, description, amount, currency = 'PHP', interva
     }
   };
   if (cycle_count != null) payload.data.attributes.cycle_count = cycle_count;
-
   const { data } = await post('/subscriptions/plans', payload);
-  return data.data; // {id, attributes...}
+  return data.data;
 }
 
-// --- Customers ---
-async function createCustomer({ email, first_name, last_name, phone }) {
-  // Sanitize phone: remove plus and spaces
-  const cleanPhone = phone ? phone.replace(/\D/g, '').slice(0, 13) : undefined;
+// Customer (fixed: default_device + strict phone format)
+function toE164PlusCountry10(phoneRaw) {
+  if (!phoneRaw) return undefined;
+  // strip non-digits, remember if it had a leading +
+  const hadPlus = /^\+/.test(phoneRaw);
+  const digits = phoneRaw.replace(/\D/g, '');
+  // If already starts with 63 and has 12 digits, keep; else try to coerce PH format
+  let withCC = digits.startsWith('63') ? digits : ('63' + digits.replace(/^0+/, ''));
+  // Enforce exactly +63 + 10 digits
+  withCC = withCC.slice(0, 12); // '63' + 10 digits = 12
+  return '+' + withCC; // total length 13 inc '+'
+}
 
+async function createCustomer({ email, first_name, last_name, phone }) {
+  const phoneE164 = toE164PlusCountry10(phone);
   const payload = {
     data: {
       attributes: {
         email,
         first_name,
         last_name,
-        phone: cleanPhone,
-        default_device: "desktop" // required by PayMongo
+        phone: phoneE164,           // e.g., +639170000000
+        default_device: "phone"     // required: "phone" or "email"
       }
     }
   };
-
   const { data } = await post('/customers', payload);
   return data.data;
 }
 
-
-// retrieve existing customer(s) by email if you prefer re-use
+// Find customer by email
 async function findCustomersByEmail(email) {
   const { data } = await get(`/customers?email=${encodeURIComponent(email)}`);
   return data.data || [];
 }
 
-// --- Subscriptions ---
+// Subscription
 async function createSubscription({ customer_id, plan_id }) {
   const payload = { data: { attributes: { customer_id, plan_id } } };
   const { data } = await post('/subscriptions', payload);
-  return data.data; // includes latest_invoice.payment_intent.id
+  return data.data;
 }
 
+// Retrieve Subscription
 async function retrieveSubscription(id) {
   const { data } = await get(`/subscriptions/${id}`);
   return data.data;
 }
 
-// --- Payment Intents (to grab client_key) ---
+// Retrieve Payment Intent (client_key)
 async function retrievePaymentIntent(id) {
   const { data } = await get(`/payment_intents/${id}`);
-  return data.data; // attributes.client_key etc.
+  return data.data;
 }
 
 module.exports = {
