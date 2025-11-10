@@ -5,6 +5,16 @@ const {
 } = require('../paymongo');
 const { saveBlueprint } = require('../utils/store');
 
+const pmPlan = await paymongo.createPlan({
+  name: plan.name,
+  description: plan.description,
+  amount: plan.amount,
+  currency: 'PHP',
+  interval: 'monthly',
+  interval_count: 1
+});
+
+
 /**
  * Input (JSON body) – very explicit for Gently Cooked:
  * {
