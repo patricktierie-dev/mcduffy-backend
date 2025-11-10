@@ -1,19 +1,17 @@
 require('dotenv').config();
 const express = require('express');
-const bodyParser = require('body-parser');
 
 const subscribeHandler = require('./handlers/subscribe');
 const webhookHandler = require('./handlers/webhook');
 
 const app = express();
 
-// CORS: only allow your store domains to call this API
+// ----- CORS (keep) -----
 const ALLOW = new Set([
   'https://mcduffy.co',
   'https://www.mcduffy.co',
   'https://mcduffytemporary.myshopify.com'
 ]);
-
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin && ALLOW.has(origin)) {
@@ -26,21 +24,22 @@ app.use((req, res, next) => {
   next();
 });
 
-// JSON for normal routes
-app.use('/api', express.json());
-
-// Webhook must read the RAW body to verify signature
-app.post('/api/paymongo/webhook',
-  bodyParser.raw({ type: '*/*' }),
+// ----- WEBHOOK FIRST: raw body only for this route -----
+app.post(
+  '/api/paymongo/webhook',
+  express.raw({ type: 'application/json' }),   // PayMongo sends application/json
   webhookHandler()
 );
 
-// Subscribe route: create plan/customer/subscription; return client_key
+// ----- JSON parser for normal APIs (after webhook) -----
+app.use(express.json());
+
+// Subscribe route (normal JSON)
 app.post('/api/paymongo/subscribe', subscribeHandler());
 
-// health
-app.get('/healthz', (req, res) => res.send('ok'));
+// Health
+app.get('/healthz', (_req, res) => res.send('ok'));
 
-const PORT = process.env.PORT || 3000;
+// Start
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`Listening on :${PORT}`));
-
