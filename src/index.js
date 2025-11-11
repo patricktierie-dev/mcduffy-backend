@@ -4,7 +4,7 @@ const express = require('express');
 const cors = require('cors');
 
 const subscribeHandler = require('./handlers/subscribe');
-const webhookHandler = require('./handlers/webhook');
+const webhookHandler   = require('./handlers/webhook');
 
 const app = express();
 
@@ -15,25 +15,23 @@ const ALLOW = [
   'https://mcduffytemporary.myshopify.com',
 ];
 
-// ----- CORS options (robust) -----
+// ----- CORS options -----
 const corsOptions = {
   origin(origin, cb) {
-    // Allow server-to-server (no Origin) and the whitelisted sites
-    if (!origin) return cb(null, true);
+    if (!origin) return cb(null, true);                 // curl/healthz
     if (ALLOW.includes(origin)) return cb(null, true);
     return cb(null, false);
   },
   methods: ['GET', 'POST', 'OPTIONS'],
-  // Do not hardcode allowedHeaders — cors will mirror what browser requests
-  maxAge: 86400, // cache preflight 24h
-  optionsSuccessStatus: 204,
+  maxAge: 86400,
+  optionsSuccessStatus: 204
 };
 
 // ----- CORS must come first -----
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
+// (Removed: app.options('*', cors(corsOptions)))
 
-// Optional: log CORS traffic for debugging
+// Optional: log CORS/preflight while debugging
 app.use((req, _res, next) => {
   if (req.method === 'OPTIONS' || req.path === '/api/paymongo/subscribe') {
     console.log('CORS', {
@@ -48,8 +46,6 @@ app.use((req, _res, next) => {
 });
 
 // ----- WEBHOOK FIRST: raw body only for this route -----
-// PayMongo requires the raw body to verify signatures.
-// This must appear BEFORE express.json().
 app.post(
   '/api/paymongo/webhook',
   express.raw({ type: 'application/json' }),
@@ -59,12 +55,12 @@ app.post(
 // ----- JSON parser for normal APIs (after webhook) -----
 app.use(express.json());
 
-// ----- Subscription route (normal JSON) -----
+// ----- Routes -----
 app.post('/api/paymongo/subscribe', subscribeHandler());
 
-// ----- Health check -----
+// Health
 app.get('/healthz', (_req, res) => res.send('ok'));
 
-// ----- Start server -----
+// Start
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`Listening on :${PORT}`));
