@@ -1,98 +1,70 @@
-const { v4: uuid } = require('uuid');
-const {
-  createPlan, createCustomer, findCustomersByEmail,
-  createSubscription, retrievePaymentIntent
-} = require('../paymongo');
-const { saveBlueprint } = require('../utils/store');
+// src/handlers/subscribe.js  (CommonJS)
+const paymongo = require('../paymongo');   // your existing helper (secret key inside)
+const shopify  = require('../shopify');    // optional if you use it here
 
-const pmPlan = await paymongo.createPlan({
-  name: plan.name,
-  description: plan.description,
-  amount: plan.amount,
-  currency: 'PHP',
-  interval: 'monthly',
-  interval_count: 1
-});
+function pick(obj, path) {
+  return path.split('.').reduce((o, k) => (o && o[k] !== undefined ? o[k] : undefined), obj);
+}
 
-
-/**
- * Input (JSON body) – very explicit for Gently Cooked:
- * {
- *   "customer": { "email": "...", "first_name": "...", "last_name": "...", "phone": "+63..." },
- *   "plan": { "id": "plan_...", OR "name": "...", "description": "...", "amount": 123400, "currency": "PHP", "interval": "monthly", "interval_count": 1 },
- *   "shopifyOrder": {
- *      "currency": "PHP",
- *      "email": "...",
- *      "lineItems": [
- *         // OPTION A (custom item)
- *         { "title": "Mcduffy Gently Home Cooked Dog Food — Chicken 2kg (monthly)", "quantity": 1,
- *           "priceSet": { "shopMoney": { "amount": 2499.00, "currencyCode": "PHP" } } }
- *         // OPTION B (real inventory)
- *         // { "variantId": "gid://shopify/ProductVariant/1234567890", "quantity": 1 }
- *      ],
- *      "amount": 2499.00,
- *      "note": "PayMongo subscription link",
- *      "tags": ["subscription","PayMongo"],
- *      "shippingAddress": { "firstName": "...", "lastName": "...", "address1":"...", "city":"...", "country":"PH", "zip":"..." }
- *   }
- * }
- */
 module.exports = function subscribeHandler() {
-  return async (req, res) => {
+  return async function handler(req, res) {
     try {
       const { customer, plan, shopifyOrder } = req.body || {};
-      if (!customer?.email) return res.status(400).json({ error: 'customer.email is required' });
-      if (!shopifyOrder?.currency || !shopifyOrder?.lineItems || !shopifyOrder?.amount)
-        return res.status(400).json({ error: 'shopifyOrder.currency, lineItems, amount are required' });
 
-      // 1) Ensure a PayMongo customer exists (reuse by email)
-      let customerId;
-      const existing = await findCustomersByEmail(customer.email);
-      if (existing.length) {
-        customerId = existing[0].id;
-      } else {
-        const c = await createCustomer(customer);
-        customerId = c.id;
+      // Basic validation
+      if (!customer || !plan) {
+        return res.status(400).json({ error: 'missing_fields', detail: 'customer and plan are required' });
       }
 
-      // 2) Ensure plan
-      let planId;
-      if (plan?.id) {
-        planId = plan.id;
-      } else {
-        if (!plan?.name || !plan?.amount) return res.status(400).json({ error: 'plan.id OR (plan.name & plan.amount) required' });
-        const p = await createPlan(plan);
-        planId = p.id;
-      }
+      // 1) Create or reuse Plan
+      const pmPlan = await paymongo.createPlan(plan); // must return { id, attributes: ... }
 
-      // 3) Create subscription (generates latest_invoice & payment_intent)
-      const sub = await createSubscription({ customer_id: customerId, plan_id: planId });
+      // 2) Create or reuse Customer
+      const pmCustomer = await paymongo.getOrCreateCustomer(customer); // must return { id, attributes: ... }
 
-      // 4) Grab payment intent id and client_key for the browser to attach the card
-      const piId = sub.attributes?.latest_invoice?.payment_intent?.id;
-      if (!piId) return res.status(500).json({ error: 'No payment_intent found on subscription.latest_invoice' });
-
-      const pi = await retrievePaymentIntent(piId);
-      const clientKey = pi.attributes?.client_key;
-      if (!clientKey) return res.status(500).json({ error: 'Payment Intent missing client_key' });
-
-      // 5) Save a "blueprint" we’ll need when webhook confirms payment
-      await saveBlueprint(piId, {
-        shopifyOrder,
-        subscriptionId: sub.id,
-        planId,
-        customerId
+      // 3) Create Subscription (without payment method yet)
+      const pmSub = await paymongo.createSubscription({
+        customerId: pmCustomer.id,
+        planId: pmPlan.id
+        // any other attributes your helper needs (e.g., start_at, metadata)
       });
 
-      // Send to browser; your front-end will create a Payment Method and attach using this client_key
-      return res.json({
-        subscriptionId: sub.id,
-        paymentIntentId: piId,
+      // 4) Extract Payment Intent + client_key for browser 3DS
+      // Try a few shapes to be robust to helper differences
+      const paymentIntentId =
+        pick(pmSub, 'attributes.latest_invoice.payment_intent_id') ||
+        pick(pmSub, 'attributes.latest_invoice.payment_intent.id') ||
+        pick(pmSub, 'data.attributes.latest_invoice.data.attributes.payment_intent_id') ||
+        pick(pmSub, 'data.attributes.latest_invoice.data.id');
+
+      const clientKey =
+        pick(pmSub, 'attributes.latest_invoice.payment_intent.attributes.client_key') ||
+        pick(pmSub, 'data.attributes.latest_invoice.data.attributes.payment_intent.attributes.client_key') ||
+        pick(pmSub, 'attributes.client_key');
+
+      if (!paymentIntentId || !clientKey) {
+        return res.status(400).json({
+          error: 'missing_payment_intent',
+          detail: 'Could not find payment intent/client_key on subscription',
+          raw: pmSub
+        });
+      }
+
+      // 5) Optionally persist mapping for your webhook de-dupe
+      // await store.save({ paymentIntentId, subscriptionId: pmSub.id });
+
+      // 6) Optionally construct a draft Shopify order payload to send later in the webhook
+      // Not required here; webhook should create the paid order.
+
+      res.json({
+        subscriptionId: pmSub.id || pick(pmSub, 'data.id'),
+        paymentIntentId,
         clientKey
       });
     } catch (err) {
-      console.error(err.response?.data || err);
-      return res.status(500).json({ error: 'subscribe failed', detail: err.response?.data || err.message });
+      console.error('subscribe error', err);
+      const detail = err?.errors || err?.message || err;
+      res.status(400).json({ error: 'subscribe failed', detail });
     }
   };
 };
