@@ -6,64 +6,30 @@ const webhookHandler = require('./handlers/webhook');
 
 const app = express();
 
-// ----- CORS (keep) -----
-// ----- CORS (fixed) -----
-// ----- CORS (robust) -----
+const cors = require('cors');
+
 const ALLOW = [
   'https://mcduffy.co',
   'https://www.mcduffy.co',
   'https://mcduffytemporary.myshopify.com',
 ];
 
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  if (origin && ALLOW.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Vary', 'Origin'); // cache correctness
-  }
+// reflect only allowed origins
+const corsOptions = {
+  origin(origin, cb) {
+    // allow same-origin/no Origin (curl/healthz) and allowed domains
+    if (!origin || ALLOW.includes(origin)) return cb(null, true);
+    return cb(null, false);
+  },
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  maxAge: 86400, // cache preflight for a day
+  optionsSuccessStatus: 204
+};
 
-  // reflect the browser’s asks
-  const acrm = req.headers['access-control-request-method'];
-  const acrh = req.headers['access-control-request-headers'];
-
-  res.setHeader('Access-Control-Allow-Methods', acrm ? `${acrm},OPTIONS` : 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', acrh ? acrh : 'Content-Type,Authorization');
-  res.setHeader('Access-Control-Max-Age', '86400');
-
-  if (req.method === 'OPTIONS') {
-    return res.status(204).end();
-  }
-  next();
-});
-
-
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  if (origin && ALLOW.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Vary', 'Origin');
-  }
-
-  // reflect what browser asks
-  const reqMethod  = req.headers['access-control-request-method'];
-  const reqHeaders = req.headers['access-control-request-headers'];
-
-  res.setHeader(
-    'Access-Control-Allow-Methods',
-    reqMethod ? reqMethod + ',OPTIONS' : 'GET,POST,OPTIONS'
-  );
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    reqHeaders ? reqHeaders : 'Content-Type,Authorization'
-  );
-  res.setHeader('Access-Control-Max-Age', '86400'); // 1 day cache
-
-  if (req.method === 'OPTIONS') {
-    // end preflight cleanly
-    return res.status(204).end();
-  }
-  next();
-});
+// CORS must be the first middleware
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // handle all preflights
 
 
 // ----- WEBHOOK FIRST: raw body only for this route -----
