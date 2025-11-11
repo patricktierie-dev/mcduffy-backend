@@ -8,11 +8,34 @@ const app = express();
 
 // ----- CORS (keep) -----
 // ----- CORS (fixed) -----
+// ----- CORS (robust) -----
 const ALLOW = [
   'https://mcduffy.co',
   'https://www.mcduffy.co',
   'https://mcduffytemporary.myshopify.com',
 ];
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && ALLOW.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin'); // cache correctness
+  }
+
+  // reflect the browser’s asks
+  const acrm = req.headers['access-control-request-method'];
+  const acrh = req.headers['access-control-request-headers'];
+
+  res.setHeader('Access-Control-Allow-Methods', acrm ? `${acrm},OPTIONS` : 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', acrh ? acrh : 'Content-Type,Authorization');
+  res.setHeader('Access-Control-Max-Age', '86400');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+  next();
+});
+
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
