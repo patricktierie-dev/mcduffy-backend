@@ -1,9 +1,17 @@
-// src/handlers/subscribe.js  (CommonJS)
-const paymongo = require('../paymongo');   // your existing helper (secret key inside)
-const shopify  = require('../shopify');    // optional if you use it here
+// src/handlers/subscribe.js
+// CommonJS. No top-level await. All awaits live inside the async handler.
 
+const paymongo = require('../paymongo'); // must export functions via module.exports
+
+// Safe getter
 function pick(obj, path) {
   return path.split('.').reduce((o, k) => (o && o[k] !== undefined ? o[k] : undefined), obj);
+}
+
+// Resolve helper name differences without crashing
+function fn(obj, names) {
+  for (const n of names) if (typeof obj[n] === 'function') return obj[n].bind(obj);
+  return null;
 }
 
 module.exports = function subscribeHandler() {
@@ -11,36 +19,53 @@ module.exports = function subscribeHandler() {
     try {
       const { customer, plan, shopifyOrder } = req.body || {};
 
-      // Basic validation
       if (!customer || !plan) {
-        return res.status(400).json({ error: 'missing_fields', detail: 'customer and plan are required' });
+        return res.status(400).json({
+          error: 'missing_fields',
+          detail: 'customer and plan are required'
+        });
       }
 
-      // 1) Create or reuse Plan
-      const pmPlan = await paymongo.createPlan(plan); // must return { id, attributes: ... }
+      // ---- hook up to your paymongo helper ----
+      const createPlan = fn(paymongo, ['createPlan', 'planCreate']);
+      const createCustomer = fn(paymongo, ['getOrCreateCustomer', 'createCustomer', 'customerCreate']);
+      const createSubscription = fn(paymongo, ['createSubscription', 'subscriptionCreate']);
 
-      // 2) Create or reuse Customer
-      const pmCustomer = await paymongo.getOrCreateCustomer(customer); // must return { id, attributes: ... }
+      if (!createPlan || !createCustomer || !createSubscription) {
+        throw new Error('paymongo helper is missing required functions');
+      }
 
-      // 3) Create Subscription (without payment method yet)
-      const pmSub = await paymongo.createSubscription({
-        customerId: pmCustomer.id,
-        planId: pmPlan.id
-        // any other attributes your helper needs (e.g., start_at, metadata)
+      // 1) Plan
+      const pmPlan = await createPlan(plan);
+      const planId = pmPlan?.id || pmPlan?.data?.id;
+      if (!planId) throw new Error('planId_not_found');
+
+      // 2) Customer
+      const pmCustomer = await createCustomer(customer);
+      const customerId = pmCustomer?.id || pmCustomer?.data?.id;
+      if (!customerId) throw new Error('customerId_not_found');
+
+      // 3) Subscription -> initial invoice -> Payment Intent
+      const pmSub = await createSubscription({
+        customerId,
+        planId,
+        metadata: { shopifyOrder: JSON.stringify(shopifyOrder || {}) }
       });
 
-      // 4) Extract Payment Intent + client_key for browser 3DS
-      // Try a few shapes to be robust to helper differences
+      const subscriptionId = pmSub?.id || pmSub?.data?.id;
+
+      // 4) Extract Payment Intent + client_key for 3‑D Secure attach
       const paymentIntentId =
-        pick(pmSub, 'attributes.latest_invoice.payment_intent_id') ||
         pick(pmSub, 'attributes.latest_invoice.payment_intent.id') ||
+        pick(pmSub, 'attributes.latest_invoice.payment_intent_id') ||
+        pick(pmSub, 'data.attributes.latest_invoice.data.attributes.payment_intent.id') ||
         pick(pmSub, 'data.attributes.latest_invoice.data.attributes.payment_intent_id') ||
-        pick(pmSub, 'data.attributes.latest_invoice.data.id');
+        pmSub?.payment_intent_id;
 
       const clientKey =
         pick(pmSub, 'attributes.latest_invoice.payment_intent.attributes.client_key') ||
         pick(pmSub, 'data.attributes.latest_invoice.data.attributes.payment_intent.attributes.client_key') ||
-        pick(pmSub, 'attributes.client_key');
+        pmSub?.client_key;
 
       if (!paymentIntentId || !clientKey) {
         return res.status(400).json({
@@ -50,21 +75,13 @@ module.exports = function subscribeHandler() {
         });
       }
 
-      // 5) Optionally persist mapping for your webhook de-dupe
-      // await store.save({ paymentIntentId, subscriptionId: pmSub.id });
-
-      // 6) Optionally construct a draft Shopify order payload to send later in the webhook
-      // Not required here; webhook should create the paid order.
-
-      res.json({
-        subscriptionId: pmSub.id || pick(pmSub, 'data.id'),
-        paymentIntentId,
-        clientKey
-      });
+      return res.json({ subscriptionId, paymentIntentId, clientKey });
     } catch (err) {
       console.error('subscribe error', err);
-      const detail = err?.errors || err?.message || err;
-      res.status(400).json({ error: 'subscribe failed', detail });
+      return res.status(400).json({
+        error: 'subscribe_failed',
+        detail: err?.errors || err?.message || String(err),
+      });
     }
   };
 };
