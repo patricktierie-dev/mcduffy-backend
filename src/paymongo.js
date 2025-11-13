@@ -1,7 +1,5 @@
-// src/paymongo.js
-// Node CJS module
-const axios = require('axios');
-
+// /src/paymongo.js
+// Minimal PayMongo client using global fetch (Node 18+)
 const BASE = 'https://api.paymongo.com/v1';
 const SK = process.env.PAYMONGO_SECRET_KEY || ''; // sk_test_... or sk_live_...
 
@@ -9,78 +7,74 @@ function authHeader(key) {
   return 'Basic ' + Buffer.from(`${key}:`).toString('base64');
 }
 
-const api = axios.create({
-  baseURL: BASE,
-  timeout: 10000,
-  headers: { 'Content-Type': 'application/json' }
-});
-
-api.interceptors.request.use(cfg => {
+async function call(path, { method = 'GET', body } = {}) {
   if (!SK) {
-    const e = new Error('PAYMONGO_SECRET_KEY not set');
+    const e = new Error('PAYMONGO_SECRET_KEY is not set');
     e.errors = [{ code: 'config', detail: 'PAYMONGO_SECRET_KEY missing' }];
     throw e;
   }
-  cfg.headers.Authorization = authHeader(SK);
-  return cfg;
-});
 
-function unwrapAxiosError(err) {
-  if (err?.response?.data) return err.response.data;
-  if (err?.response?.statusText) return { errors: [{ detail: err.response.statusText }] };
-  if (err?.message) return { errors: [{ detail: err.message }] };
-  return { errors: [{ detail: 'Unknown error' }] };
+  const res = await fetch(`${BASE}${path}`, {
+    method,
+    headers: {
+      'Authorization': authHeader(SK),
+      'Content-Type': 'application/json'
+    },
+    body: body ? JSON.stringify(body) : undefined
+  });
+
+  let json = null;
+  try { json = await res.json(); } catch (_) {}
+
+  if (!res.ok) {
+    const e = new Error(`paymongo_${res.status}`);
+    e.status = res.status;
+    // PayMongo returns { errors: [ { detail, source, code } ] }
+    e.errors = json && json.errors ? json.errors : [{
+      code: 'http_error',
+      detail: json || res.statusText || 'HTTP error'
+    }];
+    e.body = json;
+    throw e;
+  }
+  return json;
 }
 
 module.exports = {
-  // Plans live under /v1/subscriptions/plans (not /plans).
-  // interval should be 'day' | 'week' | 'month' | 'year' (use 'month' + interval_count:1).
   async createPlan({ name, description, amount, currency = 'PHP', interval = 'month', interval_count = 1 }) {
-    const body = { data: { attributes: { name, description, amount, currency, interval, interval_count } } };
-    try {
-      const { data } = await api.post('/subscriptions/plans', body);
-      return { id: data?.data?.id, ...data };
-    } catch (err) {
-      const e = new Error('plan_create_failed');
-      e.body = unwrapAxiosError(err);
-      throw e;
-    }
+    // PayMongo expects 'month', NOT 'monthly'
+    const normalizedInterval = (interval === 'monthly') ? 'month' :
+                               (interval === 'weekly')  ? 'week'  : interval;
+    const body = {
+      data: {
+        attributes: {
+          name,
+          description,
+          amount,         // centavos (integer)
+          currency,       // 'PHP'
+          interval: normalizedInterval, // 'day' | 'week' | 'month' | 'year'
+          interval_count  // integer
+        }
+      }
+    };
+    const j = await call('/plans', { method: 'POST', body });
+    return { id: j?.data?.id, ...j };
   },
 
-  // Keep attributes simple. Do NOT send default_device.
   async createCustomer({ email, first_name, last_name, phone }) {
+    // DO NOT send any extra attributes. The following are accepted.
     const body = { data: { attributes: { email, first_name, last_name, phone } } };
-    try {
-      const { data } = await api.post('/customers', body);
-      return { id: data?.data?.id, ...data };
-    } catch (err) {
-      const e = new Error('customer_create_failed');
-      e.body = unwrapAxiosError(err);
-      throw e;
-    }
+    const j = await call('/customers', { method: 'POST', body });
+    return { id: j?.data?.id, ...j };
   },
 
-  // Subscriptions live under /v1/subscriptions and expect customer_id + plan_id.
   async createSubscription({ customerId, planId }) {
-    const body = { data: { attributes: { customer_id: customerId, plan_id: planId } } };
-    try {
-      const { data } = await api.post('/subscriptions', body);
-      return { id: data?.data?.id, ...data };
-    } catch (err) {
-      const e = new Error('subscription_create_failed');
-      e.body = unwrapAxiosError(err);
-      throw e;
-    }
+    const body = { data: { attributes: { customer: customerId, plan: planId } } };
+    const j = await call('/subscriptions', { method: 'POST', body });
+    return { id: j?.data?.id, ...j };
   },
 
   async getPaymentIntent(id) {
-    try {
-      const { data } = await api.get(`/payment_intents/${id}`);
-      return data;
-    } catch (err) {
-      const e = new Error('pi_get_failed');
-      e.body = unwrapAxiosError(err);
-      throw e;
-    }
+    return call(`/payment_intents/${id}`, { method: 'GET' });
   }
 };

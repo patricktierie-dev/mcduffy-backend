@@ -1,66 +1,27 @@
-// src/index.js
-require('dotenv').config();
+// /src/index.js
 const express = require('express');
-const cors = require('cors');
-
-const subscribeHandler = require('./handlers/subscribe');
-const webhookHandler   = require('./handlers/webhook');
 
 const app = express();
+const PORT = process.env.PORT || 3000;
 
-// ----- CORS allowlist -----
-const ALLOW = [
-  'https://mcduffy.co',
-  'https://www.mcduffy.co',
-  'https://mcduffytemporary.myshopify.com',
-];
-
-// ----- CORS options -----
-const corsOptions = {
-  origin(origin, cb) {
-    if (!origin) return cb(null, true);                 // curl/healthz
-    if (ALLOW.includes(origin)) return cb(null, true);
-    return cb(null, false);
-  },
-  methods: ['GET', 'POST', 'OPTIONS'],
-  maxAge: 86400,
-  optionsSuccessStatus: 204
-};
-
-// ----- CORS must come first -----
-app.use(cors(corsOptions));
-// (Removed: app.options('*', cors(corsOptions)))
-
-// Optional: log CORS/preflight while debugging
-app.use((req, _res, next) => {
-  if (req.method === 'OPTIONS' || req.path === '/api/paymongo/subscribe') {
-    console.log('CORS', {
-      method: req.method,
-      path: req.path,
-      origin: req.headers.origin,
-      acrm: req.headers['access-control-request-method'],
-      acrh: req.headers['access-control-request-headers'],
-    });
-  }
+// Minimal CORS allowlist for Shopify storefront
+const ALLOW_ORIGIN = process.env.CORS_ORIGIN || 'https://mcduffy.co';
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', ALLOW_ORIGIN);
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.status(204).end();
   next();
 });
 
-// ----- WEBHOOK FIRST: raw body only for this route -----
-app.post(
-  '/api/paymongo/webhook',
-  express.raw({ type: 'application/json' }),
-  webhookHandler()
-);
+app.use(express.json({ limit: '1mb' }));
 
-// ----- JSON parser for normal APIs (after webhook) -----
-app.use(express.json());
-
-// ----- Routes -----
+const subscribeHandler = require('./handlers/subscribe');
 app.post('/api/paymongo/subscribe', subscribeHandler());
 
-// Health
-app.get('/healthz', (_req, res) => res.send('ok'));
+app.get('/healthz', (req, res) => res.json({ ok: true }));
 
-// Start
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`Listening on :${PORT}`));
+app.listen(PORT, () => {
+  console.log(`mcduffy-backend listening on :${PORT}`);
+});
