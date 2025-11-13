@@ -6,12 +6,13 @@
   "engines": { "node": ">=20" },
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node --watch src/index.js"
+    "dev": "node src/index.js"
   },
   "dependencies": {
+    "axios": "^1.7.7",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
-    "express": "^5.1.0",
+    "express": "^4.21.2",
     "morgan": "^1.10.0"
   }
 }

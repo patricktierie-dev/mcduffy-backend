@@ -1,77 +1,60 @@
-const BASE = 'https://api.paymongo.com/v1';
+const axios = require('axios');
 
-function pmAuthHeader() {
-  const sk = process.env.PAYMONGO_SECRET_KEY;
-  if (!sk) return null;
-  const token = Buffer.from(`${sk}:`).toString('base64');
-  return `Basic ${token}`;
+const PAYMONGO_SECRET_KEY = process.env.PAYMONGO_SECRET_KEY; // sk_live_...
+if (!PAYMONGO_SECRET_KEY) {
+  console.warn('[warn] PAYMONGO_SECRET_KEY missing');
 }
 
-exports.subscribe = async function subscribe(req, res) {
+const api = axios.create({
+  baseURL: 'https://api.paymongo.com/v1',
+  headers: {
+    Authorization: 'Basic ' + Buffer.from(`${PAYMONGO_SECRET_KEY}:`).toString('base64'),
+    'Content-Type': 'application/json'
+  },
+  timeout: 15000
+});
+
+function asCents(n) {
+  const cents = Math.round(Number(n) * 100);
+  if (!Number.isFinite(cents) || cents <= 0) throw new Error('invalid_amount');
+  return cents;
+}
+
+function mapError(err) {
   try {
-    const auth = pmAuthHeader();
-    if (!auth) {
-      return res.status(500).json({
-        errors: [{ detail: 'PAYMONGO_SECRET_KEY not configured on server' }]
-      });
-    }
+    if (err.response && err.response.data) return err.response.data;
+    return { message: err.message || 'Unknown error' };
+  } catch {
+    return { message: 'Unknown error' };
+  }
+}
 
-    const { plan } = req.body || {};
-    const amount = Number(plan && plan.amount);
-
-    if (!Number.isInteger(amount) || amount <= 0) {
-      return res.status(400).json({
-        errors: [{ detail: 'Invalid plan.amount (must be centavos integer > 0)' }]
-      });
-    }
-
-    const name = (plan && plan.name) || 'McDuffy Subscription';
-
-    // Create a Payment Intent for card, 3DS automatic
-    const payload = {
+/**
+ * Create a PayMongo Payment Intent for cards, 3DS allowed.
+ * Returns: { id, client_key }
+ */
+async function createCardPaymentIntent({ amountPHP, description, metadata }) {
+  try {
+    const body = {
       data: {
         attributes: {
-          amount,
-          currency: 'PHP',
+          amount: asCents(amountPHP),
           payment_method_allowed: ['card'],
-          payment_method_options: { card: { request_three_d_secure: 'automatic' } },
+          payment_method_options: { card: { request_three_d_secure: 'any' } },
+          currency: 'PHP',
           capture_type: 'automatic',
-          description: name,
-          statement_descriptor: 'MCDUFFY'
+          description: description || 'McDuffy subscription',
+          statement_descriptor: 'MCDUFFY',
+          metadata: metadata || {}
         }
       }
     };
-
-    const r = await fetch(`${BASE}/payment_intents`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': auth,
-        'Accept': 'application/json'
-      },
-      body: JSON.stringify(payload)
-    });
-
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      // bubble up PayMongo’s error structure so the frontend can toast it
-      return res.status(r.status).json(j);
-    }
-
-    const paymentIntentId = j?.data?.id;
-    const clientKey = j?.data?.attributes?.client_key;
-
-    if (!paymentIntentId || !clientKey) {
-      return res.status(502).json({
-        errors: [{ detail: 'PayMongo response missing id/client_key' }]
-      });
-    }
-
-    return res.json({ paymentIntentId, clientKey });
+    const r = await api.post('/payment_intents', body);
+    const d = r.data && r.data.data;
+    return { id: d.id, client_key: d.attributes.client_key };
   } catch (err) {
-    console.error('subscribe handler error', err);
-    return res.status(500).json({
-      errors: [{ detail: 'Server error creating payment intent' }]
-    });
+    throw mapError(err);
   }
-};
+}
+
+module.exports = { createCardPaymentIntent };
