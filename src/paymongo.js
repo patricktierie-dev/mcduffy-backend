@@ -1,64 +1,77 @@
-// src/paymongo.js
 const BASE = 'https://api.paymongo.com/v1';
-const SK = process.env.PAYMONGO_SECRET_KEY;
 
-function authHeader() {
-  return 'Basic ' + Buffer.from(`${SK}:`).toString('base64');
+function pmAuthHeader() {
+  const sk = process.env.PAYMONGO_SECRET_KEY;
+  if (!sk) return null;
+  const token = Buffer.from(`${sk}:`).toString('base64');
+  return `Basic ${token}`;
 }
 
-async function api(path, { method = 'GET', body } = {}) {
-  if (!SK) {
-    const e = new Error('PAYMONGO_SECRET_KEY not set');
-    e.errors = [{ code: 'config', detail: 'PAYMONGO_SECRET_KEY missing on server' }];
-    throw e;
+exports.subscribe = async function subscribe(req, res) {
+  try {
+    const auth = pmAuthHeader();
+    if (!auth) {
+      return res.status(500).json({
+        errors: [{ detail: 'PAYMONGO_SECRET_KEY not configured on server' }]
+      });
+    }
+
+    const { plan } = req.body || {};
+    const amount = Number(plan && plan.amount);
+
+    if (!Number.isInteger(amount) || amount <= 0) {
+      return res.status(400).json({
+        errors: [{ detail: 'Invalid plan.amount (must be centavos integer > 0)' }]
+      });
+    }
+
+    const name = (plan && plan.name) || 'McDuffy Subscription';
+
+    // Create a Payment Intent for card, 3DS automatic
+    const payload = {
+      data: {
+        attributes: {
+          amount,
+          currency: 'PHP',
+          payment_method_allowed: ['card'],
+          payment_method_options: { card: { request_three_d_secure: 'automatic' } },
+          capture_type: 'automatic',
+          description: name,
+          statement_descriptor: 'MCDUFFY'
+        }
+      }
+    };
+
+    const r = await fetch(`${BASE}/payment_intents`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': auth,
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      // bubble up PayMongo’s error structure so the frontend can toast it
+      return res.status(r.status).json(j);
+    }
+
+    const paymentIntentId = j?.data?.id;
+    const clientKey = j?.data?.attributes?.client_key;
+
+    if (!paymentIntentId || !clientKey) {
+      return res.status(502).json({
+        errors: [{ detail: 'PayMongo response missing id/client_key' }]
+      });
+    }
+
+    return res.json({ paymentIntentId, clientKey });
+  } catch (err) {
+    console.error('subscribe handler error', err);
+    return res.status(500).json({
+      errors: [{ detail: 'Server error creating payment intent' }]
+    });
   }
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers: { 'Authorization': authHeader(), 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined
-  });
-
-  let json = null;
-  try { json = await res.json(); } catch { json = null; }
-
-  if (!res.ok) {
-    const e = new Error(`paymongo_${res.status}`);
-    e.status = res.status;
-    e.errors = json?.errors || [{ code: 'http_error', detail: json || res.statusText }];
-    throw e;
-  }
-  return json;
-}
-
-async function createPlan({ name, description, amount, currency, interval, interval_count }) {
-  const payload = {
-    data: { attributes: {
-      name,
-      description,
-      amount: Number(amount),
-      currency: currency || 'PHP',
-      interval: interval === 'monthly' ? 'month' : (interval || 'month'),
-      interval_count: interval_count || 1
-    } }
-  };
-  const j = await api('/plans', { method: 'POST', body: payload });
-  return { id: j?.data?.id, ...j };
-}
-
-async function createCustomer({ email, first_name, last_name, phone }) {
-  const payload = { data: { attributes: { email, first_name, last_name, phone } } };
-  const j = await api('/customers', { method: 'POST', body: payload });
-  return { id: j?.data?.id, ...j };
-}
-
-async function createSubscription({ customerId, planId }) {
-  const payload = { data: { attributes: { customer: customerId, plan: planId } } };
-  const j = await api('/subscriptions', { method: 'POST', body: payload });
-  return { id: j?.data?.id, ...j };
-}
-
-async function getPaymentIntent(id) {
-  return api(`/payment_intents/${id}`, { method: 'GET' });
-}
-
-module.exports = { createPlan, createCustomer, createSubscription, getPaymentIntent };
+};

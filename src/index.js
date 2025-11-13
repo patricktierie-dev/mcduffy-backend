@@ -1,26 +1,27 @@
-// src/index.js
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
-require('dotenv').config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
 
-const ALLOW = process.env.CORS_ORIGIN || '*';
-
+// middleware
 app.use(morgan('tiny'));
-app.use(express.json());
+app.use(cors({ origin: true, credentials: false }));
+app.use(express.json({ limit: '1mb' }));
 
-// very simple CORS – lock this down later
-app.use(cors({
-  origin: (origin, cb) => cb(null, ALLOW === '*' ? true : (origin && origin.includes(ALLOW))),
-  credentials: false
-}));
+// health
+app.get('/health', (req, res) => res.json({ ok: true }));
 
-app.get('/healthz', (_req, res) => res.json({ ok: true }));
+// routes
+const paymongo = require('./handlers/paymongo');
+app.post('/api/paymongo/subscribe', paymongo.subscribe);
+// helpful message if someone browses to it
+app.get('/api/paymongo/subscribe', (req, res) => res.status(405).json({ error: 'Use POST' }));
 
-const subscribeHandler = require('./handlers/subscribe');
-app.post('/api/paymongo/subscribe', subscribeHandler());
-
-app.listen(PORT, () => console.log(`mcduffy backend listening on ${PORT}`));
+// start
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => {
+  console.log(`[mcduffy-backend] listening on :${PORT}`);
+});
