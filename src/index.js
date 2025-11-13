@@ -9,7 +9,7 @@ const webhook = require('./handlers/webhook');
 
 const app = express();
 
-// CORS: allow your shop domains + local dev
+// CORS allowlist: mcduffy.co, your myshopify domain, localhost
 const allowedFromEnv = (process.env.CORS_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean);
 const allowAllShopify = /\.myshopify\.com$/i;
 
@@ -24,13 +24,15 @@ app.use(cors({
     return cb(null, false);
   }
 }));
+
 app.use(express.json({ limit: '1mb' }));
 app.use(morgan('tiny'));
 
 app.get('/healthz', (req, res) => res.json({ ok: true }));
 
-// PayMongo endpoints
+// PayMongo
 app.post('/api/paymongo/subscribe', subscribe.createPaymentIntent);
+// Webhook (optional)
 app.post('/api/paymongo/webhook', express.raw({ type: '*/*' }), webhook.handleWebhook);
 
 const PORT = Number(process.env.PORT || 8080);
