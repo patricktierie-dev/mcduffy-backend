@@ -1,60 +1,115 @@
 const axios = require('axios');
+const { v4: uuid } = require('uuid');
 
-const PAYMONGO_SECRET_KEY = process.env.PAYMONGO_SECRET_KEY; // sk_live_...
-if (!PAYMONGO_SECRET_KEY) {
-  console.warn('[warn] PAYMONGO_SECRET_KEY missing');
-}
-
-const api = axios.create({
+const PM = axios.create({
   baseURL: 'https://api.paymongo.com/v1',
-  headers: {
-    Authorization: 'Basic ' + Buffer.from(`${PAYMONGO_SECRET_KEY}:`).toString('base64'),
-    'Content-Type': 'application/json'
-  },
-  timeout: 15000
+  timeout: 10000
 });
 
-function asCents(n) {
-  const cents = Math.round(Number(n) * 100);
-  if (!Number.isFinite(cents) || cents <= 0) throw new Error('invalid_amount');
-  return cents;
+function authHeader() {
+  const sk = process.env.PAYMONGO_SECRET_KEY;
+  if (!sk) throw new Error('PAYMONGO_SECRET_KEY is missing');
+  return 'Basic ' + Buffer.from(sk + ':').toString('base64');
 }
 
-function mapError(err) {
-  try {
-    if (err.response && err.response.data) return err.response.data;
-    return { message: err.message || 'Unknown error' };
-  } catch {
-    return { message: 'Unknown error' };
-  }
+function post(path, data, idemKey = uuid()) {
+  return PM.post(path, data, {
+    headers: {
+      'Authorization': authHeader(),
+      'Content-Type': 'application/json',
+      'Idempotency-Key': idemKey
+    }
+  });
 }
 
-/**
- * Create a PayMongo Payment Intent for cards, 3DS allowed.
- * Returns: { id, client_key }
- */
-async function createCardPaymentIntent({ amountPHP, description, metadata }) {
-  try {
-    const body = {
-      data: {
-        attributes: {
-          amount: asCents(amountPHP),
-          payment_method_allowed: ['card'],
-          payment_method_options: { card: { request_three_d_secure: 'any' } },
-          currency: 'PHP',
-          capture_type: 'automatic',
-          description: description || 'McDuffy subscription',
-          statement_descriptor: 'MCDUFFY',
-          metadata: metadata || {}
-        }
+function get(path) {
+  return PM.get(path, { headers: { 'Authorization': authHeader() } });
+}
+
+function put(path, data, idemKey = uuid()) {
+  return PM.put(path, data, {
+    headers: {
+      'Authorization': authHeader(),
+      'Content-Type': 'application/json',
+      'Idempotency-Key': idemKey
+    }
+  });
+}
+
+/* ---------- PAYMONGO ---------- */
+
+// Plan
+async function createPlan({ name, description, amount, currency = 'PHP', interval = 'monthly', interval_count = 1, cycle_count = null }) {
+  const payload = {
+    data: {
+      attributes: { name, description, amount, currency, interval, interval_count }
+    }
+  };
+  if (cycle_count != null) payload.data.attributes.cycle_count = cycle_count;
+  const { data } = await post('/subscriptions/plans', payload);
+  return data.data;
+}
+
+// Customer (fixed: default_device + strict phone format)
+function toE164PlusCountry10(phoneRaw) {
+  if (!phoneRaw) return undefined;
+  // strip non-digits, remember if it had a leading +
+  const hadPlus = /^\+/.test(phoneRaw);
+  const digits = phoneRaw.replace(/\D/g, '');
+  // If already starts with 63 and has 12 digits, keep; else try to coerce PH format
+  let withCC = digits.startsWith('63') ? digits : ('63' + digits.replace(/^0+/, ''));
+  // Enforce exactly +63 + 10 digits
+  withCC = withCC.slice(0, 12); // '63' + 10 digits = 12
+  return '+' + withCC; // total length 13 inc '+'
+}
+
+async function createCustomer({ email, first_name, last_name, phone }) {
+  const phoneE164 = toE164PlusCountry10(phone);
+  const payload = {
+    data: {
+      attributes: {
+        email,
+        first_name,
+        last_name,
+        phone: phoneE164,           // e.g., +639170000000
+        default_device: "phone"     // required: "phone" or "email"
       }
-    };
-    const r = await api.post('/payment_intents', body);
-    const d = r.data && r.data.data;
-    return { id: d.id, client_key: d.attributes.client_key };
-  } catch (err) {
-    throw mapError(err);
-  }
+    }
+  };
+  const { data } = await post('/customers', payload);
+  return data.data;
 }
 
-module.exports = { createCardPaymentIntent };
+// Find customer by email
+async function findCustomersByEmail(email) {
+  const { data } = await get(`/customers?email=${encodeURIComponent(email)}`);
+  return data.data || [];
+}
+
+// Subscription
+async function createSubscription({ customer_id, plan_id }) {
+  const payload = { data: { attributes: { customer_id, plan_id } } };
+  const { data } = await post('/subscriptions', payload);
+  return data.data;
+}
+
+// Retrieve Subscription
+async function retrieveSubscription(id) {
+  const { data } = await get(`/subscriptions/${id}`);
+  return data.data;
+}
+
+// Retrieve Payment Intent (client_key)
+async function retrievePaymentIntent(id) {
+  const { data } = await get(`/payment_intents/${id}`);
+  return data.data;
+}
+
+module.exports = {
+  createPlan,
+  createCustomer,
+  findCustomersByEmail,
+  createSubscription,
+  retrieveSubscription,
+  retrievePaymentIntent
+};

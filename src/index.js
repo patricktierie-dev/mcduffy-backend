@@ -1,41 +1,45 @@
 require('dotenv').config();
-
 const express = require('express');
-const morgan = require('morgan');
-const cors = require('cors');
 
-const subscribe = require('./handlers/subscribe');
-const webhook = require('./handlers/webhook');
+const subscribeHandler = require('./handlers/subscribe');
+const webhookHandler = require('./handlers/webhook');
 
 const app = express();
 
-// CORS allowlist: mcduffy.co, your myshopify domain, localhost
-const allowedFromEnv = (process.env.CORS_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean);
-const allowAllShopify = /\.myshopify\.com$/i;
-
-app.use(cors({
-  origin(origin, cb) {
-    if (!origin) return cb(null, true);
-    const hostname = origin.replace(/^https?:\/\//, '');
-    const okByEnv = allowedFromEnv.some(d => hostname === d || hostname.endsWith(`.${d}`));
-    const okShopify = allowAllShopify.test(hostname);
-    const okLocal = /^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(hostname);
-    if (okByEnv || okShopify || okLocal) return cb(null, true);
-    return cb(null, false);
+// ----- CORS (keep) -----
+const ALLOW = new Set([
+  'https://mcduffy.co',
+  'https://www.mcduffy.co',
+  'https://mcduffytemporary.myshopify.com'
+]);
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && ALLOW.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
   }
-}));
-
-app.use(express.json({ limit: '1mb' }));
-app.use(morgan('tiny'));
-
-app.get('/healthz', (req, res) => res.json({ ok: true }));
-
-// PayMongo
-app.post('/api/paymongo/subscribe', subscribe.createPaymentIntent);
-// Webhook (optional)
-app.post('/api/paymongo/webhook', express.raw({ type: '*/*' }), webhook.handleWebhook);
-
-const PORT = Number(process.env.PORT || 8080);
-app.listen(PORT, () => {
-  console.log(`mcduffy-backend listening on :${PORT}`);
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  next();
 });
+
+// ----- WEBHOOK FIRST: raw body only for this route -----
+app.post(
+  '/api/paymongo/webhook',
+  express.raw({ type: 'application/json' }),   // PayMongo sends application/json
+  webhookHandler()
+);
+
+// ----- JSON parser for normal APIs (after webhook) -----
+app.use(express.json());
+
+// Subscribe route (normal JSON)
+app.post('/api/paymongo/subscribe', subscribeHandler());
+
+// Health
+app.get('/healthz', (_req, res) => res.send('ok'));
+
+// Start
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => console.log(`Listening on :${PORT}`));

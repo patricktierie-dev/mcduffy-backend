@@ -2,15 +2,6 @@ const { verifyPaymongoSignature } = require('../utils/verifyPaymongoSignature');
 const { isProcessed, markProcessed, getBlueprint } = require('../utils/store');
 const { createPaidOrder } = require('../shopify');
 
-exports.handleWebhook = async (req, res) => {
-  try {
-    // Optionally verify signature with PAYMONGO_WEBHOOK_SECRET.
-    res.status(200).json({ received: true });
-  } catch (e) {
-    res.status(200).json({ received: true });
-  }
-};
-
 module.exports = function webhookHandler() {
   return async (req, res) => {
     const rawBody = req.body; // raw Buffer (see index.js for express.raw)
