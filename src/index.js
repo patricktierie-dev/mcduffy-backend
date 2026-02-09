@@ -4,6 +4,7 @@ const express = require('express');
 const subscribeHandler = require('./handlers/subscribe');
 const webhookHandler = require('./handlers/webhook');
 const createOrderHandler = require('./handlers/createOrder');
+const subscriptionsHandler = require('./handlers/subscriptions');
 
 const app = express();
 
@@ -40,6 +41,9 @@ app.post('/api/paymongo/subscribe', subscribeHandler());
 
 // Create Shopify order after payment verification (fallback for webhook)
 app.post('/api/shopify/create-order', createOrderHandler());
+
+// Get subscriptions for account management
+app.get('/api/subscriptions', subscriptionsHandler());
 
 // Health
 app.get('/healthz', (_req, res) => res.send('ok'));
