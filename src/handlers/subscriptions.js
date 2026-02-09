@@ -7,7 +7,7 @@ const https = require('https');
 
 // Shopify credentials from environment
 const SHOPIFY_SHOP = process.env.SHOPIFY_SHOP || 'mcduffytemporary.myshopify.com';
-const SHOPIFY_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
+const SHOPIFY_TOKEN = process.env.SHOPIFY_ADMIN_ACCESS_TOKEN;
 
 // PayMongo credentials
 const PAYMONGO_SECRET = process.env.PAYMONGO_SECRET_KEY;
