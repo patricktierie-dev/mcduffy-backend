@@ -51,11 +51,12 @@ async function shopifyGraphQL(query, variables = {}) {
 
 /**
  * Search for subscription orders by email
+ * Searches for orders with subscription-related tags OR PayMongo payments
  */
 async function findSubscriptionOrders(email) {
   const query = `
     query($query: String!) {
-      orders(first: 20, query: $query) {
+      orders(first: 50, query: $query, sortKey: CREATED_AT, reverse: true) {
         edges {
           node {
             id
@@ -68,6 +69,7 @@ async function findSubscriptionOrders(email) {
               }
             }
             tags
+            note
             customAttributes {
               key
               value
@@ -86,17 +88,61 @@ async function findSubscriptionOrders(email) {
     }
   `;
 
+  // Search by email only first, then filter
   const variables = {
-    query: `email:${email} tag:subscription`
+    query: `email:${email}`
   };
 
   try {
     const result = await shopifyGraphQL(query, variables);
+
+    console.log('[Subscriptions] GraphQL response:', JSON.stringify(result, null, 2));
+
     if (result.errors) {
       console.error('Shopify GraphQL errors:', result.errors);
       return [];
     }
-    return result.data?.orders?.edges?.map(e => e.node) || [];
+
+    const allOrders = result.data?.orders?.edges?.map(e => e.node) || [];
+    console.log(`[Subscriptions] Found ${allOrders.length} total orders for ${email}`);
+
+    // Filter for subscription-related orders
+    // Look for: subscription tag, PayMongo tag, or subscription in note
+    const subscriptionOrders = allOrders.filter(order => {
+      const tags = order.tags || [];
+      const note = (order.note || '').toLowerCase();
+      const lineItems = order.lineItems?.edges || [];
+
+      // Check tags for subscription indicators
+      const hasSubscriptionTag = tags.some(tag =>
+        tag.toLowerCase().includes('subscription') ||
+        tag.toLowerCase().includes('paymongo') ||
+        tag.toLowerCase().includes('recurring')
+      );
+
+      // Check note for PayMongo or subscription indicators
+      const hasSubscriptionNote = note.includes('paymongo') ||
+                                   note.includes('subscription') ||
+                                   note.includes('recurring');
+
+      // Check if it's McDuffy food (subscription product)
+      const hasMcDuffyFood = lineItems.some(item => {
+        const title = (item.node?.title || '').toLowerCase();
+        return title.includes('mcduffy') ||
+               title.includes('fresh') ||
+               title.includes('gently cooked') ||
+               title.includes('home cooked') ||
+               title.includes('dog food');
+      });
+
+      console.log(`[Subscriptions] Order ${order.name}: tags=${tags.join(',')}, hasSubTag=${hasSubscriptionTag}, hasSubNote=${hasSubscriptionNote}, hasMcDuffyFood=${hasMcDuffyFood}`);
+
+      return hasSubscriptionTag || hasSubscriptionNote || hasMcDuffyFood;
+    });
+
+    console.log(`[Subscriptions] Filtered to ${subscriptionOrders.length} subscription orders`);
+
+    return subscriptionOrders;
   } catch (error) {
     console.error('Error fetching orders:', error);
     return [];
