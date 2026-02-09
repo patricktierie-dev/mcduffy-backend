@@ -28,6 +28,24 @@ async function createPaidOrder({ currency, email, lineItems, amount, note, tags,
     }
   `;
 
+  // Map shippingAddress fields to Shopify's MailingAddressInput format
+  // Frontend sends: { firstName, lastName, address1, address2, city, province, zip, country, phone }
+  // Shopify expects: { firstName, lastName, address1, address2, city, provinceCode, zip, countryCode, phone }
+  let mappedShippingAddress = null;
+  if (shippingAddress) {
+    mappedShippingAddress = {
+      firstName: shippingAddress.firstName || '',
+      lastName: shippingAddress.lastName || '',
+      address1: shippingAddress.address1 || '',
+      address2: shippingAddress.address2 || '',
+      city: shippingAddress.city || '',
+      provinceCode: shippingAddress.province || shippingAddress.provinceCode || 'Metro Manila',
+      zip: shippingAddress.zip || '',
+      countryCode: shippingAddress.country === 'PH' ? 'PH' : (shippingAddress.countryCode || 'PH'),
+      phone: shippingAddress.phone || ''
+    };
+  }
+
   // The transaction marks it as paid.
   const variables = {
     order: {
@@ -41,7 +59,8 @@ async function createPaidOrder({ currency, email, lineItems, amount, note, tags,
       }],
       note,
       tags,
-      shippingAddress
+      shippingAddress: mappedShippingAddress,
+      billingAddress: mappedShippingAddress // Use same address for billing
     }
   };
 
