@@ -5,6 +5,12 @@ const subscribeHandler = require('./handlers/subscribe');
 const webhookHandler = require('./handlers/webhook');
 const createOrderHandler = require('./handlers/createOrder');
 const subscriptionsHandler = require('./handlers/subscriptions');
+const {
+  pauseSubscription,
+  resumeSubscription,
+  skipSubscription,
+  cancelSubscription
+} = require('./handlers/subscriptionActions');
 
 const app = express();
 
@@ -44,6 +50,12 @@ app.post('/api/shopify/create-order', createOrderHandler());
 
 // Get subscriptions for account management
 app.get('/api/subscriptions', subscriptionsHandler());
+
+// Subscription actions (pause, resume, skip, cancel)
+app.post('/api/subscriptions/:id/pause', pauseSubscription);
+app.post('/api/subscriptions/:id/resume', resumeSubscription);
+app.post('/api/subscriptions/:id/skip', skipSubscription);
+app.post('/api/subscriptions/:id/cancel', cancelSubscription);
 
 // Health
 app.get('/healthz', (_req, res) => res.send('ok'));
