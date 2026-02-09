@@ -99,6 +99,26 @@ async function retrieveSubscription(id) {
   return data.data;
 }
 
+// Cancel Subscription
+// Reason options: 'too_expensive', 'missing_features', 'switched_service', 'unused', 'other'
+async function cancelPayMongoSubscription(id, reason = 'other') {
+  const payload = {
+    data: {
+      attributes: {
+        cancellation_reason: reason
+      }
+    }
+  };
+  const { data } = await post(`/subscriptions/${id}/cancel`, payload);
+  return data.data;
+}
+
+// List Subscriptions by Customer ID
+async function listSubscriptionsByCustomer(customerId) {
+  const { data } = await get(`/subscriptions?customer_id=${customerId}`);
+  return data.data || [];
+}
+
 // Retrieve Payment Intent (client_key)
 async function retrievePaymentIntent(id) {
   const { data } = await get(`/payment_intents/${id}`);
@@ -111,5 +131,7 @@ module.exports = {
   findCustomersByEmail,
   createSubscription,
   retrieveSubscription,
+  cancelPayMongoSubscription,
+  listSubscriptionsByCustomer,
   retrievePaymentIntent
 };

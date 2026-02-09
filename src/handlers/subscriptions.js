@@ -199,12 +199,15 @@ function transformToSubscriptions(orders) {
     // Find recipe from attributes or line items
     let recipe = null;
     let provider = 'card'; // default
-    let subscriptionId = null;
+    let paymongoSubscriptionId = null;
 
     attrs.forEach(attr => {
       if (attr.key === 'recipe') recipe = attr.value;
       if (attr.key === 'provider') provider = attr.value;
-      if (attr.key === 'subscription_id') subscriptionId = attr.value;
+      // PayMongo subscription ID is stored here when subscription is created
+      if (attr.key === 'subscription_id' || attr.key === 'paymongo_subscription_id') {
+        paymongoSubscriptionId = attr.value;
+      }
     });
 
     // Get plan name from first line item
@@ -216,10 +219,14 @@ function transformToSubscriptions(orders) {
     if (tags.includes('cancelled')) status = 'cancelled';
     if (tags.includes('paused')) status = 'suspended';
 
+    // Use Shopify order ID as the main identifier for actions
+    const shopifyOrderId = order.id.replace('gid://shopify/Order/', '');
+
     return {
-      id: subscriptionId || order.id.replace('gid://shopify/Order/', ''),
+      id: shopifyOrderId, // Shopify order ID for tagging/notes
       order_id: order.id,
       order_name: order.name,
+      paymongo_subscription_id: paymongoSubscriptionId, // PayMongo ID for cancellation
       status: status,
       provider: provider,
       recipe: recipe,
