@@ -9,8 +9,10 @@ const {
   pauseSubscription,
   resumeSubscription,
   skipSubscription,
-  cancelSubscription
+  cancelSubscription,
+  updateRecipe
 } = require('./handlers/subscriptionActions');
+const { getDogProfile, saveDogProfile } = require('./handlers/dogProfiles');
 
 const app = express();
 
@@ -51,11 +53,16 @@ app.post('/api/shopify/create-order', createOrderHandler());
 // Get subscriptions for account management
 app.get('/api/subscriptions', subscriptionsHandler());
 
-// Subscription actions (pause, resume, skip, cancel)
+// Subscription actions (pause, resume, skip, cancel, update-recipe)
 app.post('/api/subscriptions/:id/pause', pauseSubscription);
 app.post('/api/subscriptions/:id/resume', resumeSubscription);
 app.post('/api/subscriptions/:id/skip', skipSubscription);
 app.post('/api/subscriptions/:id/cancel', cancelSubscription);
+app.post('/api/subscriptions/:id/update-recipe', updateRecipe);
+
+// Dog profiles (save to Shopify customer metafields)
+app.get('/api/dog-profiles', getDogProfile);
+app.post('/api/dog-profiles', saveDogProfile);
 
 // Health
 app.get('/healthz', (_req, res) => res.send('ok'));

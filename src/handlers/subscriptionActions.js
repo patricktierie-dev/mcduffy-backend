@@ -395,9 +395,120 @@ async function cancelSubscription(req, res) {
   }
 }
 
+/**
+ * POST /api/subscriptions/:id/update-recipe
+ *
+ * Changes the recipe for a subscription.
+ * Since PayMongo doesn't support updating subscriptions, this:
+ * 1. Updates Shopify order tags/notes with new recipe
+ * 2. Stores the recipe change for the next delivery
+ *
+ * Valid recipes: 'surf_turf', 'farmyard_feast', 'coastal_blend'
+ */
+async function updateRecipe(req, res) {
+  const { id } = req.params;
+  const { email, newRecipe, currentRecipe } = req.body || {};
+
+  console.log(`[SubscriptionActions] Updating recipe for ${id}: ${currentRecipe} -> ${newRecipe}`);
+
+  // Validate recipe
+  const validRecipes = ['surf_turf', 'farmyard_feast', 'coastal_blend'];
+  if (!validRecipes.includes(newRecipe)) {
+    return res.status(400).json({
+      error: 'Invalid recipe',
+      message: `Recipe must be one of: ${validRecipes.join(', ')}`
+    });
+  }
+
+  try {
+    // 1. Update Shopify order with new recipe info
+    const gid = id.startsWith('gid://') ? id : `gid://shopify/Order/${id}`;
+
+    // Remove old recipe tag, add new one
+    if (currentRecipe) {
+      await removeOrderTag(id, `recipe:${currentRecipe}`);
+    }
+    await addOrderTag(id, `recipe:${newRecipe}`);
+    await addOrderTag(id, 'recipe-changed');
+
+    // 2. Add note about recipe change
+    const changeDate = new Date().toISOString();
+    const recipeNames = {
+      'surf_turf': 'Surf & Turf (Beef & Fish)',
+      'farmyard_feast': 'Farmyard Feast (Pork, Chicken & Fish)',
+      'coastal_blend': 'Coastal Blend (Fish)'
+    };
+
+    const noteText = `Recipe changed on ${changeDate}:\n` +
+      `From: ${recipeNames[currentRecipe] || currentRecipe || 'Unknown'}\n` +
+      `To: ${recipeNames[newRecipe]}\n` +
+      `Change will apply to next delivery.`;
+
+    // Get current note and append
+    const order = await getOrderWithSubscriptionId(id);
+    const existingNote = order?.note || '';
+    const newNote = existingNote + '\n\n---\n' + noteText;
+
+    await updateOrderNote(id, newNote);
+
+    // 3. Update custom attributes with new recipe
+    const updateMutation = `
+      mutation orderUpdate($input: OrderInput!) {
+        orderUpdate(input: $input) {
+          order {
+            id
+            customAttributes {
+              key
+              value
+            }
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
+    // Preserve existing attributes and update recipe
+    const existingAttrs = order?.customAttributes || [];
+    const newAttrs = existingAttrs
+      .filter(a => a.key !== 'recipe' && a.key !== 'previous_recipe')
+      .map(a => ({ key: a.key, value: a.value }));
+
+    newAttrs.push({ key: 'recipe', value: newRecipe });
+    newAttrs.push({ key: 'previous_recipe', value: currentRecipe || '' });
+    newAttrs.push({ key: 'recipe_changed_at', value: changeDate });
+
+    await shopifyGraphQL(updateMutation, {
+      input: {
+        id: gid,
+        customAttributes: newAttrs
+      }
+    });
+
+    console.log(`[SubscriptionActions] Recipe updated successfully for ${id}`);
+
+    return res.json({
+      success: true,
+      message: `Recipe changed to ${recipeNames[newRecipe]}. This will apply to your next delivery.`,
+      newRecipe: newRecipe,
+      previousRecipe: currentRecipe
+    });
+
+  } catch (error) {
+    console.error('[SubscriptionActions] Update recipe error:', error);
+    return res.status(500).json({
+      error: 'Failed to update recipe',
+      message: error.message
+    });
+  }
+}
+
 module.exports = {
   pauseSubscription,
   resumeSubscription,
   skipSubscription,
-  cancelSubscription
+  cancelSubscription,
+  updateRecipe
 };
